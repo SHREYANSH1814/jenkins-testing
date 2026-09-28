@@ -11,6 +11,9 @@ pipeline {
     agent any
 
     environment {
+        // Jenkins on macOS (launchd/.app) gets a minimal PATH without
+        // /usr/local/bin, so `docker` isn't found. Prepend Docker's location.
+        PATH               = "/usr/local/bin:/opt/homebrew/bin:${env.PATH}"
         HARNESS_DOMAIN     = 'https://sto.harness.io'
         HARNESS_ACCOUNT_ID = 'YTg1ZTIzODYtZGU3Yy00Mm'
         HARNESS_ORG_ID     = 'jenkinstest'
