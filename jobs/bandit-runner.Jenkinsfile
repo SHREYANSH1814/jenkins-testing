@@ -27,8 +27,9 @@ pipeline {
         stage('Checkout NodeGoat') {
             steps {
                 sh '''
-                    rm -rf nodegoat
-                    git clone --depth 1 https://github.com/owasp/nodegoat.git nodegoat
+                    rm -rf dvpwa
+                    git clone --depth 1 https://github.com/anxolerd/dvpwa dvpwa
+
                 '''
             }
         }
@@ -42,7 +43,7 @@ pipeline {
                     echo "$WORKSPACE"
                     echo "===== top-level contents ====="
                     ls -la "$WORKSPACE"
-                    echo "===== nodegoat clone contents ====="
+                    echo "===== dpwa clone contents ====="
                     ls -la "$WORKSPACE/nodegoat"
                 '''
                 script {
@@ -52,10 +53,9 @@ pipeline {
                         scanner   : 'bandit',
                         scanMode  : 'orchestration',
                         targetType: 'repository',
-                        workspace : 'nodegoat',
-                        // Point at the nodegoat clone so /harness IS its clone root
+                        // Point at the dvpwa clone so /harness IS its clone root
                         // (has .git) — required for the plugin's git auto-detect.
-                        sourceRoot: "${env.WORKSPACE}/nodegoat",
+                        sourceRoot: "${env.WORKSPACE}/dvpwa",
                     ])
                 }
             }
