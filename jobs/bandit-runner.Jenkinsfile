@@ -12,9 +12,10 @@ pipeline {
 
     environment {
         HARNESS_DOMAIN     = 'https://sto.harness.io'
-        HARNESS_ORG_ID     = 'my_org_id'
-        HARNESS_PROJECT_ID = 'my_project_id'
-        HARNESS_TOKEN      = credentials('harness-token')
+        HARNESS_ACCOUNT_ID = 'YTg1ZTIzODYtZGU3Yy00Mm'
+        HARNESS_ORG_ID     = 'jenkinstest'
+        HARNESS_PROJECT_ID = 'jenkins'
+        HARNESS_TOKEN      = credentials('harness-pat-token-sto-lab')
     }
 
     stages {
@@ -31,6 +32,16 @@ pipeline {
 
         stage('Bandit') {
             steps {
+                // Show what WORKSPACE points to and what's inside it.
+                echo "WORKSPACE = ${env.WORKSPACE}"
+                sh '''
+                    echo "===== WORKSPACE path ====="
+                    echo "$WORKSPACE"
+                    echo "===== top-level contents ====="
+                    ls -la "$WORKSPACE"
+                    echo "===== nodegoat clone contents ====="
+                    ls -la "$WORKSPACE/nodegoat"
+                '''
                 script {
                     def sto = load 'lib/StoScan.groovy'
                     sto.init(this)
