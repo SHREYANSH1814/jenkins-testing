@@ -52,7 +52,7 @@ pipeline {
                         scanner   : 'bandit',
                         scanMode  : 'orchestration',
                         targetType: 'repository',
-                        workspace : '.',
+                        workspace : 'nodegoat',
                         // Point at the nodegoat clone so /harness IS its clone root
                         // (has .git) — required for the plugin's git auto-detect.
                         sourceRoot: "${env.WORKSPACE}/nodegoat",
