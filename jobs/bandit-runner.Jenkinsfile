@@ -56,6 +56,8 @@ pipeline {
                         // Point at the dvpwa clone so /harness IS its clone root
                         // (has .git) — required for the plugin's git auto-detect.
                         sourceRoot : "${env.WORKSPACE}/dvpwa",
+                        failOnSeverity: 'critical',
+                        showSummary: false,
                     ])
 
                 
