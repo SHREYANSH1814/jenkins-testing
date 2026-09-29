@@ -70,7 +70,6 @@ pipeline {
                                 targetType   : targetType,
                                 ingestionFile: ingestFile,
                                 sourceRoot   : src,
-                                creds        : [],
                                 targetName   : "shreyansh/${scanner}-ingest",
                                 targetVariant: 'main',
                                 outputFile   : "scan-output-${scanner}-ingest.env",
