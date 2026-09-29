@@ -30,7 +30,12 @@ def pluginWorkspace(String workspaceRel) {
         return '/harness'
     }
     w = w.replaceFirst('^\\./', '').replaceFirst('^/+', '')
-    if (w == 'harness' || w.startsWith('harness/')) {
+    // A repo subdirectory named harness/foo is /harness/foo.
+    // The directory itself is /harness/harness (clone root stays /harness).
+    if (w == 'harness') {
+        return '/harness/harness'
+    }
+    if (w.startsWith('harness/')) {
         return "/${w}"
     }
     return "/harness/${w}"
@@ -73,13 +78,14 @@ def productName(String scanner) {
         case 'owaspzap':
             return 'zap'
         case 'checkmarxone':
+        case 'checkmarx_one':
             return 'checkmarx-one'
         case 'mend':
             return 'whitesource'
         case 'customingest':
         case 'custom_ingest':
         case 'custom':
-            return 'external'
+            return 'custom'
         case 'cortexcloud':
         case 'cortex_cloud':
         case 'cortex':
@@ -116,8 +122,8 @@ def jobRunnerImage(String scanner, Map cfg = [:]) {
         case 'custom':
         case 'customingest':
         case 'custom_ingest':
-        case 'fossa':
         case 'metasploit':                   name = 'sto-plugin'; break
+        case 'fossa':                        name = 'fossa-job-runner'; break
         case 'cortexcloud':
         case 'cortex_cloud':
         case 'cortex':                       name = 'cortex-cloud-job-runner'; break
@@ -137,7 +143,10 @@ def jobRunnerImage(String scanner, Map cfg = [:]) {
         case 'nmap':                         name = 'nmap-job-runner'; break
         case 'osv':                          name = 'osv-job-runner'; break
         case 'owasp':                        name = 'owasp-dependency-check-job-runner'; break
+        case 'prisma':
         case 'prismacloud':
+        case 'prisma_cloud':
+        case 'prisma-cloud':
         case 'twistlock':                    name = 'twistlock-job-runner'; break
         case 'prowler':                      name = 'prowler-job-runner'; break
         case 'semgrep':                      name = 'semgrep-job-runner'; break
@@ -155,34 +164,72 @@ def jobRunnerImage(String scanner, Map cfg = [:]) {
     return "harness/${name}:${tag}"
 }
 
+// Socket the Jenkins agent uses to talk to Docker.
 def dockerSockPath() {
     def host = env.DOCKER_HOST ?: 'unix:///var/run/docker.sock'
     return host.startsWith('unix://') ? host.substring('unix://'.length()) : '/var/run/docker.sock'
 }
 
+// Path the Docker daemon can bind-mount into the scanner container.
+// Colima and Docker Desktop give the Mac a proxy socket. The daemon inside
+// the VM only has /var/run/docker.sock, and mounting the Mac path fails with
+// "mkdir .../docker.sock: operation not supported".
+def dockerSockMountPath() {
+    def client = dockerSockPath()
+    if (client.contains('/.colima/') || client.contains('/.docker/run/') || client.endsWith('/.rd/docker.sock')) {
+        return '/var/run/docker.sock'
+    }
+    return client
+}
+
 def coerceTargetType(String scanner, String targetType) {
     def lc = scanner.toLowerCase()
     def tt = (targetType ?: 'repository').toLowerCase()
+    // Empty or repository follows the action: remap. Any other type is a mistake.
     if (lc == 'prowler') {
-        return 'configuration'
+        if (!tt || tt == 'repository') {
+            return 'configuration'
+        }
+        if (tt != 'configuration') {
+            steps.error("prowler supports target-type configuration only (got: ${targetType})")
+        }
+        return tt
     }
     if (lc == 'traceable') {
-        return 'instance'
+        if (!tt || tt == 'repository') {
+            return 'instance'
+        }
+        if (tt != 'instance') {
+            steps.error("traceable supports target-type instance only (got: ${targetType})")
+        }
+        return tt
     }
     return tt
+}
+
+def shellSingleQuote(String value) {
+    return "'" + value.replace("'", "'\\''") + "'"
 }
 
 def targetFlags(Map cfg) {
     def mode = (cfg.scanMode ?: 'orchestration').toLowerCase()
     def targetType = (cfg.targetType ?: 'repository').toLowerCase()
+    def name = cfg.targetName?.toString()?.trim()
+    def variant = cfg.targetVariant?.toString()?.trim()
     def alwaysManual = cfg.alwaysManual == true ||
         mode == 'ingestion' ||
         targetType == 'configuration'
-    if (alwaysManual || (cfg.targetName && cfg.targetVariant)) {
-        if (!cfg.targetName?.toString()?.trim() || !cfg.targetVariant?.toString()?.trim()) {
+    if (name && !variant) {
+        steps.error('TARGET_VARIANT is required when TARGET_NAME is set')
+    }
+    if (!name && variant) {
+        steps.error('TARGET_NAME is required when TARGET_VARIANT is set')
+    }
+    if (alwaysManual || (name && variant)) {
+        if (!name || !variant) {
             steps.error('TARGET_NAME and TARGET_VARIANT are required for manual detection / ingestion / configuration')
         }
-        return "-e TARGET_DETECTION=MANUAL -e TARGET_NAME='${cfg.targetName}' -e TARGET_VARIANT='${cfg.targetVariant}'"
+        return "-e TARGET_DETECTION=MANUAL -e TARGET_NAME=${shellSingleQuote(name)} -e TARGET_VARIANT=${shellSingleQuote(variant)}"
     }
     return '-e TARGET_DETECTION=auto'
 }
@@ -284,12 +331,34 @@ def credBindings(List kinds) {
     return list
 }
 
+def exportScanResult(String outputFile) {
+    if (!steps.fileExists(outputFile)) {
+        return
+    }
+    def text = steps.readFile(file: outputFile)
+    def vals = [:]
+    for (line in text.split('\n')) {
+        def idx = line.indexOf('=')
+        if (idx > 0) {
+            vals[line.substring(0, idx)] = line.substring(idx + 1)
+        }
+    }
+    if (vals.JOB_ID != null) { env.STO_SCAN_ID = vals.JOB_ID }
+    if (vals.STATUS != null) { env.STO_SCAN_STATUS = vals.STATUS }
+    if (vals.ISSUES_COUNT != null) { env.STO_ISSUES_COUNT = vals.ISSUES_COUNT }
+    if (vals.CRITICAL != null) { env.STO_CRITICAL = vals.CRITICAL }
+    if (vals.HIGH != null) { env.STO_HIGH = vals.HIGH }
+    if (vals.MEDIUM != null) { env.STO_MEDIUM = vals.MEDIUM }
+    if (vals.LOW != null) { env.STO_LOW = vals.LOW }
+    if (vals.INFO != null) { env.STO_INFO = vals.INFO }
+}
+
 def showScanSummary(String outputFile, Map cfg = [:]) {
     def show = cfg.showSummary
     if (show == false || show == 'false') {
         return
     }
-    steps.sh """
+    steps.sh(script: """
         if [ -f '${outputFile}' ]; then
             echo "============================================================"
             echo "HARNESS STO SCAN RESULTS"
@@ -316,13 +385,48 @@ def showScanSummary(String outputFile, Map cfg = [:]) {
             echo "Execution URL: \${BUILD_URL}"
             echo "============================================================"
         fi
-    """
+    """, returnStatus: true)
 }
 
 def addIf(List extra, String envName, def value) {
     if (value != null && value.toString().trim()) {
-        extra << "-e ${envName}='${value}'"
+        extra << "-e ${envName}=${shellSingleQuote(value.toString())}"
     }
+}
+
+// Map values (stoScan scanner-access-token, and similar) become container env
+// without landing in the sh script text. Unset keys keep the withCredentials / job env.
+def bindSecret(List secretEnv, String envName, def value) {
+    def v = value?.toString()?.trim()
+    if (!v) {
+        return false
+    }
+    secretEnv << "${envName}=${v}"
+    return true
+}
+
+def scannerEnvBindings(def raw) {
+    def lines = []
+    def text = raw?.toString()
+    if (!text?.trim()) {
+        return lines
+    }
+    for (line in text.split('\n')) {
+        def trimmed = line.toString().trim()
+        if (!trimmed || trimmed.startsWith('#')) {
+            continue
+        }
+        def eq = trimmed.indexOf('=')
+        if (eq <= 0) {
+            steps.error("scanner-env lines must be KEY=value (got: ${trimmed})")
+        }
+        def key = trimmed.substring(0, eq)
+        if (!(key ==~ /[A-Za-z_][A-Za-z0-9_]*/)) {
+            steps.error("scanner-env key must be an environment variable name (got: ${key})")
+        }
+        lines << trimmed
+    }
+    return lines
 }
 
 // Template-library mendStep remaps byTokens/byNames for orchestration.
@@ -412,13 +516,29 @@ def runDocker(Map cfg) {
         def hostScanDir = wsRelInside ? "${sourceRoot}/${wsRelInside}" : sourceRoot
         def imageType = (cfg.imageType ?: '').toString()
         def imageTypeLc = imageType.toLowerCase().replace('_', '-')
+        // Unset dockerMode keeps the previous auto host-Docker rules.
+        def dockerModeRaw = (cfg.dockerMode ?: '').toString().trim().toLowerCase().replace('_', '-')
+        def pluginDockerMode = ''
+        if (dockerModeRaw in ['with-docker-in-docker', 'docker-in-docker']) {
+            pluginDockerMode = 'docker-in-docker'
+        } else if (dockerModeRaw == 'without-docker-in-docker') {
+            pluginDockerMode = 'without-docker-in-docker'
+        } else if (dockerModeRaw) {
+            steps.error("docker-mode must be docker-in-docker or without-docker-in-docker (got: ${cfg.dockerMode})")
+        }
+        def autoHostDocker = targetType == 'container' &&
+            scanMode != 'ingestion' &&
+            scanMode != 'extraction' &&
+            product in ['blackduckhub', 'twistlock', 'cortex_cloud']
         def useHostDocker = cfg.useHostDocker == true ||
+            pluginDockerMode == 'docker-in-docker' ||
             imageTypeLc in ['local-image'] ||
-            (targetType == 'container' &&
-                scanMode != 'ingestion' &&
-                scanMode != 'extraction' &&
-                product in ['blackduckhub', 'twistlock', 'cortex_cloud'])
+            (pluginDockerMode != 'without-docker-in-docker' && autoHostDocker)
+        if (useHostDocker && !pluginDockerMode) {
+            pluginDockerMode = 'docker-in-docker'
+        }
         def sock = dockerSockPath()
+        def sockMount = dockerSockMountPath()
         def extra = []
         extra << "-e SCANNER=${product}"
         extra << "-e PRODUCT_NAME=${product}"
@@ -430,6 +550,13 @@ def runDocker(Map cfg) {
         // Plugin defaults pipelineId to "_pipeline" when HARNESS_PIPELINE_ID is unset.
         // JOB_NAME is the Jenkins pipeline; STO MachineNamePattern disallows hyphens/slashes.
         def pipelineId = (env.JOB_NAME ?: '').toString().replaceAll(/[^a-zA-Z0-9_]/, '_')
+        if (pipelineId) {
+            def lead = pipelineId.substring(0, 1)
+            def leadOk = lead == '_' || (lead >= 'A' && lead <= 'Z') || (lead >= 'a' && lead <= 'z')
+            if (!leadOk) {
+                pipelineId = "_${pipelineId}"
+            }
+        }
         if (pipelineId.length() > 128) {
             pipelineId = pipelineId.substring(0, 128)
         }
@@ -463,14 +590,23 @@ def runDocker(Map cfg) {
         if (env.SCANNER_ACCESS_TOKEN) { needsToken = true }
         if (env.SCANNER_ACCESS_ID) { needsId = true }
         if (env.SCANNER_DOMAIN) { needsDomain = true }
+        def secretEnv = []
+        if (bindSecret(secretEnv, 'SCANNER_ACCESS_TOKEN', cfg.scannerAccessToken)) { needsToken = true }
+        if (bindSecret(secretEnv, 'SCANNER_ACCESS_ID', cfg.scannerAccessId)) { needsId = true }
         if (needsToken) { extra << '-e SCANNER_ACCESS_TOKEN' }
         if (needsId) { extra << '-e SCANNER_ACCESS_ID' }
         if (needsDomain) { extra << '-e SCANNER_DOMAIN' }
-        if (kinds.contains('docker') || cfg.imageAccessEnv || env.IMAGE_ACCESS_TOKEN) {
+        def imageFromCfg = false
+        if (bindSecret(secretEnv, 'IMAGE_ACCESS_ID', cfg.imageAccessId)) { imageFromCfg = true }
+        if (bindSecret(secretEnv, 'IMAGE_ACCESS_TOKEN', cfg.imageAccessToken)) { imageFromCfg = true }
+        if (imageFromCfg || kinds.contains('docker') || cfg.imageAccessEnv || env.IMAGE_ACCESS_TOKEN) {
             extra << '-e IMAGE_ACCESS_ID'
             extra << '-e IMAGE_ACCESS_TOKEN'
         }
-        if (kinds.contains('aws_config') || env.CONFIGURATION_ACCESS_TOKEN) {
+        def configFromCfg = false
+        if (bindSecret(secretEnv, 'CONFIGURATION_ACCESS_ID', cfg.configurationAccessId)) { configFromCfg = true }
+        if (bindSecret(secretEnv, 'CONFIGURATION_ACCESS_TOKEN', cfg.configurationAccessToken)) { configFromCfg = true }
+        if (configFromCfg || kinds.contains('aws_config') || env.CONFIGURATION_ACCESS_TOKEN) {
             extra << '-e CONFIGURATION_ACCESS_ID'
             extra << '-e CONFIGURATION_ACCESS_TOKEN'
         }
@@ -480,7 +616,13 @@ def runDocker(Map cfg) {
         addIf(extra, 'SCANNER_VERIFY_SSL', cfg.scannerVerifySsl)
         addIf(extra, 'SCANNER_PROJECT_NAME', cfg.scannerProjectName)
         addIf(extra, 'SCANNER_PROJECT_VERSION', cfg.scannerProjectVersion)
-        addIf(extra, 'SCANNER_PROJECT_KEY', cfg.scannerProjectKey)
+        addIf(extra, 'SCANNER_REGION', cfg.scannerRegion)
+        // SonarQube identity is the project key. Copy the name only when the key is empty.
+        def projectKey = cfg.scannerProjectKey?.toString()?.trim()
+        if (!projectKey && product == 'sonarqube' && cfg.scannerProjectName?.toString()?.trim()) {
+            projectKey = cfg.scannerProjectName.toString().trim()
+        }
+        addIf(extra, 'SCANNER_PROJECT_KEY', projectKey)
         addIf(extra, 'PRODUCT_ANALYSIS_DETECTION', cfg.productAnalysisDetection)
         addIf(extra, 'SCANNER_BRANCH_NAME', cfg.scannerBranchName)
         addIf(extra, 'SCANNER_EXCLUDE', cfg.scannerExclude)
@@ -497,8 +639,17 @@ def runDocker(Map cfg) {
         addIf(extra, 'SCANNER_SCAN_NAME', cfg.scannerScanName)
         addIf(extra, 'SCANNER_RUNNER_ID', cfg.scannerRunnerId)
         addIf(extra, 'SCANNER_CONTEXT', cfg.scannerContext)
-        addIf(extra, 'TOOL_ARGS', cfg.toolArgs)
+        def toolArgs = cfg.toolArgs?.toString()?.trim() ?: ''
+        def orgId = cfg.scannerOrganizationId?.toString()?.trim()
+        if (product == 'sonarqube' && orgId) {
+            def padded = " ${toolArgs} "
+            if (!padded.contains(' -Dsonar.organization=') && !padded.contains(' sonar.organization=')) {
+                toolArgs = toolArgs ? "${toolArgs} -Dsonar.organization=${orgId}" : "-Dsonar.organization=${orgId}"
+            }
+        }
+        addIf(extra, 'TOOL_ARGS', toolArgs)
         addIf(extra, 'INGEST_TOOL_SEVERITY', cfg.ingestToolSeverity)
+        addIf(extra, 'INCLUDE_RAW', cfg.includeRaw)
         addIf(extra, 'CONFIGURATION_REGION', cfg.configurationRegion)
         addIf(extra, 'ZAP_PORT', cfg.zapPort)
 
@@ -510,7 +661,7 @@ def runDocker(Map cfg) {
             addIf(extra, 'IMAGE_NAME', cfg.imageName)
             addIf(extra, 'IMAGE_TAG', cfg.imageTag)
             addIf(extra, 'CONTAINER_DOMAIN', cfg.imageDomain)
-            addIf(extra, 'CONTAINER_TYPE', imageType)
+            addIf(extra, 'CONTAINER_TYPE', imageType ?: 'docker_v2')
             addIf(extra, 'CONTAINER_REGION', cfg.containerRegion)
         }
         if (targetType == 'instance') {
@@ -520,24 +671,49 @@ def runDocker(Map cfg) {
             addIf(extra, 'INSTANCE_PATH', cfg.instancePath)
         }
 
+        if (pluginDockerMode) {
+            extra << "-e DOCKER_MODE=${pluginDockerMode}"
+        }
         def hostDockerFlags = ''
         if (useHostDocker) {
-            extra << '-e DOCKER_MODE=docker-in-docker'
             extra << '-e ADDON_PATH=/tmp/sto-addon'
-            hostDockerFlags = "--privileged --network host -v ${sock}:/var/run/docker.sock -v /tmp/sto-addon:/tmp/sto-addon"
+            hostDockerFlags = "--privileged --network host -v ${sockMount}:/var/run/docker.sock -v /tmp/sto-addon:/tmp/sto-addon"
         } else if (cfg.privileged == true) {
             hostDockerFlags = '--privileged'
         }
+        def passEnv = scannerEnvBindings(cfg.scannerEnv)
+        for (line in passEnv) {
+            extra << "-e ${line.substring(0, line.indexOf('='))}"
+        }
 
         def ingestFlags = ''
+        def ingestHost = ''
         if (scanMode == 'ingestion') {
             if (!cfg.ingestionFile) {
                 steps.error('INGESTION_FILE is required when SCAN_MODE is ingestion')
             }
-            def ingestHost = cfg.ingestionFile.toString().startsWith('/')
-                ? cfg.ingestionFile
+            ingestHost = cfg.ingestionFile.toString().startsWith('/')
+                ? cfg.ingestionFile.toString()
                 : "${sourceRoot}/${cfg.ingestionFile}"
-            ingestFlags = "-v ${ingestHost}:/harness-ingestion/results:ro -e INGESTION_FILE=/harness-ingestion/results"
+            ingestFlags = "-v ${shellSingleQuote(ingestHost)}:/harness-ingestion/results:ro -e INGESTION_FILE=/harness-ingestion/results"
+        }
+
+        def preflight = ''
+        if (useHostDocker) {
+            preflight += """
+            if [ ! -S ${shellSingleQuote(sock)} ]; then
+              echo "Error: this scan needs the host Docker daemon but ${sock} was not found."
+              exit 1
+            fi
+"""
+        }
+        if (scanMode == 'ingestion') {
+            preflight += """
+            if [ ! -f ${shellSingleQuote(ingestHost)} ]; then
+              echo "Error: ingestion file not found: ${ingestHost}"
+              exit 1
+            fi
+"""
         }
 
         def extraStr = extra.join(' \\\n                                ')
@@ -570,7 +746,7 @@ def runDocker(Map cfg) {
         }
 
         def runScript = """
-            set +e
+            set -e
             mkdir -p /tmp/sto-addon
             mkdir -p "${hostScanDir}"
             if [ -n "\${STO_REG_USER:-}" ] && [ -n "\${STO_REG_TOKEN:-}" ]; then
@@ -580,6 +756,8 @@ def runDocker(Map cfg) {
                 echo "\$STO_REG_TOKEN" | docker login --username "\$STO_REG_USER" --password-stdin
               fi
             fi
+            ${preflight}
+            set +e
             docker run --rm --pull ${pullPolicy} \\
                 ${runtimeFlags} \\
                 -v "${repoMount}:/harness" \\
@@ -596,17 +774,25 @@ def runDocker(Map cfg) {
                 ${extraStr} \\
                 ${image}
             SCAN_EXIT=\$?
-            set -e
             exit \$SCAN_EXIT
         """
-        if (loginEnv) {
-            steps.withEnv(loginEnv) {
-                steps.sh runScript
+        def runEnv = []
+        runEnv.addAll(loginEnv)
+        runEnv.addAll(secretEnv)
+        runEnv.addAll(passEnv)
+        def scanStatus
+        if (runEnv) {
+            steps.withEnv(runEnv) {
+                scanStatus = steps.sh(script: runScript, returnStatus: true)
             }
         } else {
-            steps.sh runScript
+            scanStatus = steps.sh(script: runScript, returnStatus: true)
         }
+        exportScanResult(outputFile)
         showScanSummary(hostOutput, cfg)
+        if (scanStatus != 0) {
+            steps.error("STO scan failed with exit code ${scanStatus}")
+        }
 }
 
 def runFromParams(String scanner, Map opts = [:]) {
@@ -690,6 +876,12 @@ def runFromParams(String scanner, Map opts = [:]) {
     if (p.REGISTRY_USERNAME) { cfg.registryUsername = p.REGISTRY_USERNAME }
     if (p.REGISTRY_TOKEN) { cfg.registryToken = p.REGISTRY_TOKEN }
     if (p.REGISTRY_DOMAIN) { cfg.registryDomain = p.REGISTRY_DOMAIN }
+    if (p.SCANNER_REGION) { cfg.scannerRegion = p.SCANNER_REGION }
+    if (p.DOCKER_MODE) { cfg.dockerMode = p.DOCKER_MODE }
+    if (p.SCANNER_ENV) { cfg.scannerEnv = p.SCANNER_ENV }
+    if (p.INCLUDE_RAW != null && p.INCLUDE_RAW.toString().trim()) {
+        cfg.includeRaw = p.INCLUDE_RAW.toString()
+    }
 
     run(cfg)
 }
