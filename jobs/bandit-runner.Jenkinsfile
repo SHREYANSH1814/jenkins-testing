@@ -43,20 +43,23 @@ pipeline {
                     echo "$WORKSPACE"
                     echo "===== top-level contents ====="
                     ls -la "$WORKSPACE"
-                    echo "===== dpwa clone contents ====="
-                    ls -la "$WORKSPACE/nodegoat"
+                    echo "===== dvpwa clone contents ====="
+                    ls -la "$WORKSPACE/dvpwa"
                 '''
                 script {
                     def sto = load 'lib/StoScan.groovy'
                     sto.init(this)
                     sto.run([
-                        scanner   : 'bandit',
-                        scanMode  : 'orchestration',
-                        targetType: 'repository',
+                        scanner    : 'bandit',
+                        scanMode   : 'orchestration',
+                        targetType : 'repository',
                         // Point at the dvpwa clone so /harness IS its clone root
                         // (has .git) — required for the plugin's git auto-detect.
-                        sourceRoot: "${env.WORKSPACE}/dvpwa",
+                        sourceRoot : "${env.WORKSPACE}/dvpwa",
+                        showSummary: false,   // print the CRITICAL/HIGH/... table (default)
                     ])
+
+                
                 }
             }
         }
