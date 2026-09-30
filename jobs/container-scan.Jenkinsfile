@@ -44,7 +44,6 @@ pipeline {
                                 targetType    : 'container',
                                 imageName     : 'johnkday/nodegoat',
                                 imageTag      : 'latest',
-                                creds         : ['docker'],
                                 targetName    : 'johnkday/nodegoat',
                                 targetVariant : 'latest',
                                 failOnSeverity: 'critical',
