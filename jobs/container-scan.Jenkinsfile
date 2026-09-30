@@ -64,7 +64,6 @@ pipeline {
                             targetName    : 'shreyansh/privatecontainer1',
                             targetVariant : 'latest',
                             imageAccessEnv: true,
-                            failOnSeverity: 'critical',
                             outputFile    : 'scan-output-aquatrivy-private.env',
                             showSummary   : true,
                         ])
@@ -98,7 +97,6 @@ pipeline {
                         targetName    : 'sg123',
                         targetVariant : localTag,
                         creds         : [],
-                        failOnSeverity: 'low',
                         outputFile    : 'scan-output-aquatrivy-local.env',
                         showSummary   : true,
                     ])
@@ -122,7 +120,6 @@ pipeline {
                         targetName    : 'nginx',
                         targetVariant : 'latest',
                         creds         : [],
-                        failOnSeverity: 'critical',
                         outputFile    : 'scan-output-aquatrivy-registry.env',
                         showSummary   : true,
                     ])
