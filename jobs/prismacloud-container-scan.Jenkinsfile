@@ -20,7 +20,8 @@
 // Jenkins credentials required (Manage Jenkins → Credentials, "Secret text"):
 //   harness-pat-token-sto-lab                              (HARNESS_TOKEN, all)
 //   PRIVATE_DOCKER_ACCESS_ID, PRIVATE_DOCKER_ACCESS_TOKEN  (stage 2 private image)
-//   PRISMA_ACCESS_ID, PRISMA_ACCESS_TOKEN                  (prisma scanner auth)
+//   PRISMA_ACCESS_ID, PRISMA_ACCESS_TOKEN, PRISMA_DOMAIN   (prisma scanner auth)
+//   (PRISMA_DOMAIN = Prisma Console URL; Twistlock cannot connect without it.)
 
 def sto
 
@@ -56,6 +57,7 @@ pipeline {
                     withCredentials([
                         string(credentialsId: 'PRISMA_ACCESS_ID',    variable: 'SCANNER_ACCESS_ID'),
                         string(credentialsId: 'PRISMA_ACCESS_TOKEN', variable: 'SCANNER_ACCESS_TOKEN'),
+                        string(credentialsId: 'PRISMA_DOMAIN',       variable: 'SCANNER_DOMAIN'),
                     ]) {
                         sto.run([
                             scanner       : 'prismacloud',
@@ -85,6 +87,7 @@ pipeline {
                         string(credentialsId: 'PRIVATE_DOCKER_ACCESS_TOKEN', variable: 'IMAGE_ACCESS_TOKEN'),
                         string(credentialsId: 'PRISMA_ACCESS_ID',            variable: 'SCANNER_ACCESS_ID'),
                         string(credentialsId: 'PRISMA_ACCESS_TOKEN',         variable: 'SCANNER_ACCESS_TOKEN'),
+                        string(credentialsId: 'PRISMA_DOMAIN',               variable: 'SCANNER_DOMAIN'),
                     ]) {
                         sto.run([
                             scanner       : 'prismacloud',
@@ -119,6 +122,7 @@ pipeline {
                     withCredentials([
                         string(credentialsId: 'PRISMA_ACCESS_ID',    variable: 'SCANNER_ACCESS_ID'),
                         string(credentialsId: 'PRISMA_ACCESS_TOKEN', variable: 'SCANNER_ACCESS_TOKEN'),
+                        string(credentialsId: 'PRISMA_DOMAIN',       variable: 'SCANNER_DOMAIN'),
                     ]) {
                         sto.run([
                             scanner       : 'prismacloud',
