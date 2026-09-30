@@ -28,6 +28,10 @@ pipeline {
 
     environment {
         PATH               = "/usr/local/bin:/opt/homebrew/bin:${env.PATH}"
+        // Local-image scan (stage "Local build & scan") needs the host Docker
+        // socket. /var/run/docker.sock is a dangling symlink here; point at the
+        // real Colima socket so StoScan's preflight and bind-mount resolve.
+        DOCKER_HOST        = 'unix:///Users/shreyanshgupta/.colima/default/docker.sock'
         HARNESS_DOMAIN     = 'https://sto.harness.io'
         HARNESS_ACCOUNT_ID = 'YTg1ZTIzODYtZGU3Yy00Mm'
         HARNESS_ORG_ID     = 'jenkinstest'
