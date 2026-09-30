@@ -1,18 +1,27 @@
-// Container image scans — one pipeline, all container scanners run in PARALLEL.
-// Ported from sto-testing-repo/.github/workflows/*-container / *-orchestration.yml
-// (aqua_trivy, grype, harness-sca, prisma-cloud, blackduck).
+// Container image scans — three sequential stages, each a different source:
+//   1. Registry image        — scan an image pulled from a public/registry source.
+//   2. Private registry image — scan an image pulled from a PRIVATE registry
+//                               (withCredentials binds the registry secrets to
+//                               IMAGE_ACCESS_ID/TOKEN).
+//                               Ported from sto-testing-repo/.github/workflows/
+//                               aqua-trivy-orchestration.yml.
+//   3. Local build & scan     — build/tag an image on the host Docker daemon, then
+//                               scan it with imageType 'local_image'.
+//                               Ported from sto-testing-repo/.github/workflows/
+//                               aqua-trivy-local-image.yml.
 //
-// No repo checkout: these scan container images, not source. The scanner reads
-// the image from a registry (or the host Docker daemon for local images).
+// All scanning goes through lib/StoScan.groovy (loaded once, reused per stage).
+// Do not inline the docker run here — StoScan owns that.
 //
 // Pipeline from SCM → this repo; script path jobs/container-scan.Jenkinsfile
-// (uncheck "Lightweight checkout"). Docker Desktop/Colima must be running.
+// (uncheck "Lightweight checkout"). Docker Desktop/Colima must be running
+// (stage 3 uses the host Docker daemon to read the locally built image).
 //
 // Jenkins credentials required (Manage Jenkins → Credentials, "Secret text"):
 //   harness-pat-token-sto-lab                              (HARNESS_TOKEN, all)
-//   PRIVATE_DOCKER_ACCESS_ID, PRIVATE_DOCKER_ACCESS_TOKEN  (aqua_trivy private image)
-//   PRISMA_ACCESS_ID, PRISMA_ACCESS_TOKEN, PRISMA_DOMAIN   (prisma-cloud)
-//   BLACKDUCK_DOMAIN, BLACKDUCK_ACCESS_ID, BLACKDUCK_ACCESS_TOKEN (blackduck)
+//   PRIVATE_DOCKER_ACCESS_ID, PRIVATE_DOCKER_ACCESS_TOKEN  (stage 2 private image)
+
+def sto
 
 pipeline {
     agent any
@@ -27,104 +36,99 @@ pipeline {
     }
 
     stages {
-        stage('Container scans') {
+        stage('Load STO library') {
             steps {
                 script {
-                    def sto = load 'lib/StoScan.groovy'
+                    sto = load 'lib/StoScan.groovy'
                     sto.init(this)
-
-                    parallel(
-                        'aqua-trivy': {
-                            // Private registry image → creds:['docker'] binds
-                            // PRIVATE_DOCKER_ACCESS_ID/TOKEN → IMAGE_ACCESS_*.
-                            sto.run([
-                                scanner       : 'aqua_trivy',
-                                scanMode      : 'orchestration',
-                                scanConfig    : 'default',
-                                targetType    : 'container',
-                                imageName     : 'johnkday/nodegoat',
-                                imageTag      : 'latest',
-                                targetName    : 'johnkday/nodegoat',
-                                targetVariant : 'latest',
-                                failOnSeverity: 'critical',
-                                outputFile    : 'scan-output-aquatrivy.env',
-                                showSummary   : true,
-                            ])
-                        }
-                        // 'grype': {
-                        //     // Public Docker Hub image → no image credentials.
-                        //     sto.run([
-                        //         scanner    : 'grype',
-                        //         scanMode   : 'orchestration',
-                        //         scanConfig : 'default',
-                        //         targetType : 'container',
-                        //         imageName  : 'nginx',
-                        //         imageTag   : 'latest',
-                        //         imageDomain: 'docker.io',
-                        //         imageType  : 'docker_v2',
-                        //         creds      : [],
-                        //         outputFile : 'scan-output-grype.env',
-                        //         showSummary: true,
-                        //     ])
-                        // },
-                        // 'harness-sca': {
-                        //     sto.run([
-                        //         scanner    : 'harnesssca',
-                        //         scanMode   : 'orchestration',
-                        //         scanConfig : 'default',
-                        //         targetType : 'container',
-                        //         imageName  : 'nginx',
-                        //         imageTag   : 'latest',
-                        //         imageDomain: 'docker.io',
-                        //         imageType  : 'docker_v2',
-                        //         creds      : [],
-                        //         outputFile : 'scan-output-harnesssca.env',
-                        //         showSummary: true,
-                        //     ])
-                        // },
-                        // 'prisma-cloud': {
-                        //     // creds:['prisma'] binds PRISMA_ACCESS_ID/TOKEN/DOMAIN.
-                        //     sto.run([
-                        //         scanner    : 'prismacloud',
-                        //         scanMode   : 'orchestration',
-                        //         scanConfig : 'default',
-                        //         targetType : 'container',
-                        //         imageName  : 'nginx',
-                        //         imageTag   : 'latest',
-                        //         imageDomain: 'docker.io',
-                        //         imageType  : 'docker_v2',
-                        //         creds      : ['prisma'],
-                        //         outputFile : 'scan-output-prismacloud.env',
-                        //         showSummary: true,
-                        //     ])
-                        // },
-                        // 'blackduck': {
-                        //     // creds:['blackduck'] binds BLACKDUCK_DOMAIN/ACCESS_ID/TOKEN.
-                        //     sto.run([
-                        //         scanner             : 'blackduck',
-                        //         scanMode            : 'orchestration',
-                        //         scanConfig          : 'default',
-                        //         targetType          : 'container',
-                        //         imageName           : 'johnkday/nodegoat',
-                        //         imageTag            : 'latest',
-                        //         imageDomain         : 'docker.io',
-                        //         imageType           : 'docker_v2',
-                        //         creds               : ['blackduck'],
-                        //         scannerAuthType     : 'apiKey',
-                        //         scannerApiVersion   : '5.0.2',
-                        //         scannerVerifySsl    : 'false',
-                        //         scannerProjectName  : 'mudit',
-                        //         scannerProjectVersion: 'test',
-                        //         toolArgs            : '--blackduck.trust.cert=true',
-                        //         logLevel            : 'INFO',
-                        //         privileged          : true,
-                        //         outputFile          : 'scan-output-blackduck.env',
-                        //         showSummary         : true,
-                        //     ])
-                        // },
-                    )
                 }
             }
         }
+
+      
+        stage('Private registry image scan') {
+            steps {
+                script {
+                    
+                    withCredentials([
+                        string(credentialsId: 'PRIVATE_DOCKER_ACCESS_ID',    variable: 'IMAGE_ACCESS_ID'),
+                        string(credentialsId: 'PRIVATE_DOCKER_ACCESS_TOKEN', variable: 'IMAGE_ACCESS_TOKEN'),
+                    ]) {
+                        sto.run([
+                            scanner       : 'aqua_trivy',
+                            scanMode      : 'orchestration',
+                            scanConfig    : 'default',
+                            targetType    : 'container',
+                            imageName     : 'nirocr/nodegoat',
+                            imageTag      : 'latest',
+                            targetName    : 'shreyansh/privatecontainer1',
+                            targetVariant : 'latest',
+                            imageAccessEnv: true,
+                            failOnSeverity: 'critical',
+                            outputFile    : 'scan-output-aquatrivy-private.env',
+                            showSummary   : true,
+                        ])
+                    }
+                }
+            }
+        }
+
+        stage('Local build & scan') {
+            steps {
+                script {
+                    // Build/tag an image on the host Docker daemon, then scan it.
+                    // Mirrors aqua-trivy-local-image.yml (docker build → local_image).
+                    def localTag = "build-${env.BUILD_NUMBER}"
+                    sh """
+                        set -e
+                        docker pull node:14
+                        docker tag node:14 sg123:${localTag}
+                    """
+
+                    // imageType 'local_image' → StoScan uses the host Docker daemon
+                    // (docker-in-docker, mounts /var/run/docker.sock). No registry pull.
+                    sto.run([
+                        scanner       : 'aqua_trivy',
+                        scanMode      : 'orchestration',
+                        scanConfig    : 'default',
+                        targetType    : 'container',
+                        imageName     : 'sg123',
+                        imageTag      : localTag,
+                        imageType     : 'local_image',
+                        targetName    : 'sg123',
+                        targetVariant : localTag,
+                        creds         : [],
+                        failOnSeverity: 'low',
+                        outputFile    : 'scan-output-aquatrivy-local.env',
+                        showSummary   : true,
+                    ])
+                }
+            }
+        }
+
+          stage('Registry image scan') {
+            steps {
+                script {
+                    // Public/registry image → no image credentials.
+                    sto.run([
+                        scanner       : 'aqua_trivy',
+                        scanMode      : 'orchestration',
+                        scanConfig    : 'default',
+                        targetType    : 'container',
+                        imageName     : 'nginx',
+                        imageTag      : 'latest',
+                        imageDomain   : 'docker.io',
+                        imageType     : 'docker_v2',
+                        targetName    : 'nginx',
+                        targetVariant : 'latest',
+                        creds         : [],
+                        failOnSeverity: 'critical',
+                        outputFile    : 'scan-output-aquatrivy-registry.env',
+                        showSummary   : true,
+                    ])
+                }
+            }
+        }
+
     }
 }
